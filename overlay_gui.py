@@ -1,42 +1,27 @@
 import tkinter as tk
 from tkinter import ttk
-import threading
 import logging
-import keyboard
 from player_scan import PlayerScan
-from spellcaster import SpellCaster
-from spells import SpellCollection
 from memory_reader import WoWMemoryReader
-import time
+from spellsystem import SpellCollection, D3DHook  # Updated import
 import queue
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class OverlayGUI:
-    def __init__(self, master, player_scan: PlayerScan):
+    def __init__(self, master, player_scan, spell_collection, d3d_hook):
         self.master = master
         self.master.title("Overlay GUI")
-
         self.player_scan = player_scan
-        self.memory_reader = player_scan.pm  # Reference to WoWMemoryReader instance from player_scan
-
-        # Pass memory_reader to SpellCollection
-        self.spell_collection = SpellCollection(self.memory_reader)
+        self.memory_reader = player_scan.pm 
+        self.spell_collection = spell_collection # Use the passed-in spell_collection
+        self.d3d_hook = d3d_hook
         self.spell_collection.update_known_spells()
-        
-        # Initialize SpellCaster with memory_reader and spell_collection
-        self.spell_caster = SpellCaster(self.memory_reader, self.spell_collection)
-
         self.spell_cast_queue = queue.Queue()
-
         self.create_tabs()
         self.update_gui()
-
-        # Start monitoring align cast in a separate thread after GUI setup is done
-        self.start_monitoring_align_cast()
-
-        # Start processing the queue in the main thread
         self.process_queue()
 
     def create_tabs(self):
@@ -141,36 +126,14 @@ class OverlayGUI:
         self.spells_tree.delete(*self.spells_tree.get_children())
 
         for spell in self.spell_collection.known_spells:
-            self.spells_tree.insert('', 'end', values=(spell.id, spell.healing_percentage))
-
-    def start_monitoring_align_cast(self):
-        """Starts the thread to monitor the Align spell cast."""
-        try:
-            align_thread = threading.Thread(target=self.monitor_align_cast, daemon=True)
-            align_thread.start()
-            logging.info("Started monitoring Align cast.")
-        except Exception as e:
-            logging.error(f"Failed to start monitoring Align cast: {e}")
-
-    def monitor_align_cast(self):
-        """Continuously checks if the '1' key is held down to cast Align on the local player."""
-        try:
-            while True:
-                if keyboard.is_pressed("1"):
-                    local_player_guid = self.player_scan.get_local_player_guid()
-                    if local_player_guid:
-                        self.spell_cast_queue.put((986163, local_player_guid))
-                time.sleep(0.1)  # Check every 100 milliseconds
-        except Exception as e:
-            logging.error(f"Error in monitoring Align cast: {e}")
+            self.spells_tree.insert('', 'end', values=(spell.id))
 
     def process_queue(self):
-        """Processes the spell cast queue in the main thread."""
         try:
             while not self.spell_cast_queue.empty():
                 spell_id, target_guid = self.spell_cast_queue.get()
-                self.spell_caster.cast_spell_by_id(spell_id, target_guid)
-            self.master.after(100, self.process_queue)  # Schedule the next queue processing
+                self.d3d_hook.queue_spell_cast(spell_id, target_guid)
+            self.master.after(100, self.process_queue)
         except Exception as e:
             logging.error(f"Error in processing spell cast queue: {e}")
 
@@ -178,10 +141,21 @@ if __name__ == "__main__":
     root = tk.Tk()
     
     # Initialize the memory reader
-    memory_reader = WoWMemoryReader()  # Make sure you have an instance of your memory reader
-    player_scan = PlayerScan(memory_reader)  # Pass the memory reader to PlayerScan
-    spell_collection = SpellCollection(memory_reader)  # Initialize SpellCollection
-    spell_caster = SpellCaster(memory_reader, spell_collection)  # Initialize SpellCaster
-
-    gui = OverlayGUI(root, player_scan)
-    root.mainloop()
+    memory_reader = WoWMemoryReader()
+    player_scan = PlayerScan(memory_reader)
+    
+    # Initialize spell systems
+    spell_collection = SpellCollection(memory_reader)
+    d3d_hook = D3DHook(memory_reader, spell_collection)  # Create D3DHook instance
+    
+    # Initialize GUI with dependencies
+    gui = OverlayGUI(root, player_scan, spell_collection, d3d_hook)
+    
+    # Hook D3D before main loop
+    d3d_hook.hook_end_scene()
+    
+    try:
+        root.mainloop()
+    finally:
+        # Ensure we unhook D3D when closing
+        d3d_hook.unhook_end_scene()
