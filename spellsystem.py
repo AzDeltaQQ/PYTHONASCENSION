@@ -5,6 +5,7 @@ from typing import Optional, Tuple, List
 from memory_reader import WoWMemoryReader  # Removed LuaInterface
 from ctypes import c_int, c_void_p, c_bool
 from offsets import Offsets
+from lua import WoWLuaEngine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,31 +48,46 @@ class SpellCollection:
 
     def initialize_delegates(self):
         try:
-            # Get the correct function address from Offsets
+            # Get the correct function address
             cast_spell_addr = Offsets.LuaFuncs["lua_CastSpellByID"]
             
-            # Create delegate for CastSpellByID function
-            self.cast_spell_delegate = self.pm.register_function(
-                cast_spell_addr,
-                ctypes.CFUNCTYPE(None, c_int)  # void return, takes spell ID
+            # Define correct function prototype
+            # __stdcall convention, void return type, takes spell ID and optionally target GUID
+            SPELL_FUNC = ctypes.WINFUNCTYPE(
+                None,            # Return type (void)
+                ctypes.c_uint32, # Spell ID
+                ctypes.c_char_p  # Target GUID (optional)
             )
-            logging.info(f"Spell casting delegate initialized at address {hex(cast_spell_addr)}")
+            
+            # Create delegate
+            self.cast_spell_delegate = SPELL_FUNC(cast_spell_addr)
+            logging.info(f"Spell casting delegate initialized at {hex(cast_spell_addr)}")
+            
         except Exception as e:
             logging.error(f"Failed to initialize spell delegates: {e}")
             raise
-
-    def cast_spell(self, spell_id: int) -> bool:
+    
+    def cast_spell(self, spell_id: int, target_guid: str = None) -> bool:
         try:
             if self.cast_spell_delegate is None:
                 logging.error("Spell delegate not initialized")
                 return False
-
-            self.cast_spell_delegate(spell_id)
-            logging.info(f"Cast spell {spell_id}")
+    
+            # Convert spell_id to unsigned 32-bit int
+            spell_id = ctypes.c_uint32(spell_id)
+            
+            # Convert target GUID if provided
+            target = ctypes.c_char_p(target_guid.encode()) if target_guid else ctypes.c_char_p(None)
+            
+            # Call the function
+            self.cast_spell_delegate(spell_id, target)
+            logging.info(f"Cast spell {spell_id.value} {f'on {target_guid}' if target_guid else ''}")
             return True
+            
         except Exception as e:
             logging.error(f"Failed to cast spell {spell_id}: {e}")
             return False
+
 
     def register_delegate(self, address, func_type):
         try:

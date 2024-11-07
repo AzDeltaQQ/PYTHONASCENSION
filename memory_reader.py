@@ -1,20 +1,43 @@
 import pymem
 import struct
 import ctypes
-from ctypes import c_int, c_char_p, c_void_p, c_bool, c_double
 import logging
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class WoWMemoryReader:
-
     def __init__(self, process_name="Ascension.exe"):
         self.pm = pymem.Pymem(process_name)
         self.base_address = pymem.process.module_from_name(self.pm.process_handle, process_name).lpBaseOfDll
         self.process_id = self.pm.process_id
         logging.info(f"Module Base Address for {process_name}: {hex(self.base_address)}")
 
+    def register_function(self, function_address, return_type=None, args=None):
+        """Register a function for calling from memory"""
+        if return_type is None:
+            return_type = ctypes.c_int
+        if args is None:
+            args = []
+
+        function_prototype = ctypes.WINFUNCTYPE(return_type, *args)
+        return function_prototype(function_address)
+
+    def read_memory(self, address, data_type):
+        try:
+            return self.pm.read_memory(address, data_type)
+        except Exception as e:
+            logging.error(f"Error reading memory at {hex(address)}: {e}")
+            return None
+
+    def write_memory(self, address, data_type, value):
+        try:
+            self.pm.write_memory(address, data_type, value)
+            return True
+        except Exception as e:
+            logging.error(f"Error writing memory at {hex(address)}: {e}")
+            return False
+        
     def read(self, address, size):
         """Reads raw bytes from memory at the specified address."""
         try:
